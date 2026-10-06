@@ -155,3 +155,18 @@ void show_progress_page() BANKED {
     set_bkg_tiles(BAR_X, BAR_Y + 1, BAR_TOTAL_TILES, 1, bot_empty);
 
 }
+
+/* Boot word-sum screen. Same bar as address gen, without that page's
+   counters or copy. progress is 0..144 pixels. */
+void prepare_rom_check_bar(void) BANKED {
+    set_bkg_palette(6, 1, progress_bar_palettes);
+    set_bkg_data(TILE_BASE, progress_bar_TILE_COUNT, progress_bar_tiles);
+
+    if (_cpu == CGB_TYPE) {
+        VBK_REG = 1;
+        fill_bkg_rect(0, 0, 20, 3, 1);
+        fill_bkg_rect(BAR_X, BAR_Y, BAR_TOTAL_TILES, 2, 6);
+        VBK_REG = 0;
+    }
+    update_progress(0);
+}

@@ -1,7 +1,7 @@
 #include <stdint.h>
 
 // SHA-512 round constants in separate file for banking
-#pragma bank 1
+#pragma bank 10
 const uint64_t sha512_K[80] = {
     0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
     0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,

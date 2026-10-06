@@ -9,11 +9,88 @@
 #include "src/assets/bellslogo.h"
 
 #include "bitrot_rom.h"
+#include "draw.h"
+#include "progress.h"
 
 
 #pragma bank 7
 
 static unsigned char blank_tile = 0;
+
+static uint16_t scan_last;
+static uint16_t scan_stored;
+static uint16_t scan_bank;
+static uint8_t scan_half;
+static uint8_t scan_on;
+extern volatile uint16_t boot_sum;
+
+static void scan_begin(void) {
+    if (scan_on) return;
+    read_trailer(&scan_last, &scan_stored, 0);
+    boot_sum = 0;
+    scan_bank = 0;
+    scan_half = 0;
+    scan_on = 1;
+}
+
+static uint8_t scan_finished(void) {
+    return scan_bank > scan_last;
+}
+
+static void scan_slice(void) {
+    if (scan_finished()) return;
+    rom_sum_slice(scan_bank, scan_half == 0);
+    if (scan_half == 0) {
+        scan_half = 1;
+    } else {
+        scan_half = 0;
+        scan_bank++;
+    }
+}
+
+static uint8_t scan_bar_px(void) {
+    uint16_t done = ((uint16_t)scan_bank << 1) + scan_half;
+    uint16_t px = (uint16_t)((done * 55u) >> 8);
+    if (px > 144u) px = 144u;
+    return (uint8_t)px;
+}
+
+static void scan_frame(void) {
+    vsync();
+    scan_slice();
+}
+
+static void show_rom_check_screen(void) {
+    uint8_t n;
+
+    init_draw();
+    clear_screen();
+    if (_cpu != CGB_TYPE) {
+        BGP_REG = 0xE4;
+        OBP0_REG = 0xE4;
+        OBP1_REG = 0xE4;
+    }
+    prepare_rom_check_bar();
+    gotoxy(4, 1);
+    printf("Checking ROM");
+
+    vsync();
+    update_progress(scan_bar_px());
+
+    while (!scan_finished()) {
+        for (n = 0; n < 8 && !scan_finished(); n++) scan_slice();
+        vsync();
+        update_progress(scan_bar_px());
+    }
+    vsync();
+    update_progress(144);
+
+    if (boot_sum != scan_stored) {
+        gotoxy(3, 8);
+        printf("Corrupted ROM!");
+        while (1) vsync();
+    }
+}
 
 const palette_color_t white[4] = {
     RGB8(255,255,255), RGB8(255,255,255),
@@ -21,7 +98,7 @@ const palette_color_t white[4] = {
 };
 
 
-void fade_palette(const palette_color_t* start_pal, const palette_color_t* target_pal) {
+void fade_palette(const palette_color_t* start_pal, const palette_color_t* target_pal, uint8_t scan) {
 
     if(_cpu == CGB_TYPE)
     {
@@ -44,7 +121,10 @@ void fade_palette(const palette_color_t* start_pal, const palette_color_t* targe
                 fade_pal[i] = r | (g << 5) | (b << 10);
             }
             set_bkg_palette(0, 1, fade_pal);
-            for (uint8_t f = 0; f < 6; f++) vsync();  
+            for (uint8_t f = 0; f < 6; f++) {
+                if (scan) scan_frame();
+                else vsync();
+            }
         }
 
         set_bkg_palette(0, 1, target_pal);
@@ -61,7 +141,10 @@ void fade_palette(const palette_color_t* start_pal, const palette_color_t* targe
             BGP_REG  = steps[i];
             OBP0_REG = steps[i];
             OBP1_REG = steps[i];
-            for (uint8_t f = 0; f < 12; f++) vsync();
+            for (uint8_t f = 0; f < 12; f++) {
+                if (scan) scan_frame();
+                else vsync();
+            }
         }
     }
    
@@ -75,7 +158,8 @@ void show_splash(
     uint8_t map_width,
     uint8_t map_height,
     const palette_color_t* palette,
-    uint8_t integrityCheck
+    uint8_t scan,
+    uint8_t finish_check
 )  {  
     DISPLAY_OFF;
     HIDE_SPRITES;
@@ -97,22 +181,22 @@ void show_splash(
         asset_palette[i] = palette[i];
     }
     
+    if (scan) scan_begin();
+
     DISPLAY_ON;
-    fade_palette(white, asset_palette);
+    fade_palette(white, asset_palette, scan);
 
-    if (integrityCheck && !quick_rom_verify_integrity()) {
-        gotoxy(0, 8);
-        printf(" Corrupted ROM!\n");
-        while (1) vsync();
-    }
-    
-    if(!integrityCheck) {
-        for(uint8_t i = 0; i < 90 && !joypad(); i++) {
-            vsync();
-        }
+    for (uint8_t i = 0; i < 90 && !joypad(); i++) {
+        if (scan) scan_frame();
+        else vsync();
     }
 
-    fade_palette(asset_palette, white);
+    fade_palette(asset_palette, white, scan);
+
+    if (finish_check) {
+        show_rom_check_screen();
+        return;
+    }
 
     for (uint8_t y = 0; y < 18; y++) {
         for (uint8_t x = 0; x < 20; x++) {
@@ -135,6 +219,7 @@ void show_pepe_splash(void) BANKED {
         pepelogo_MAP_ATTRIBUTES_WIDTH,
         pepelogo_MAP_ATTRIBUTES_HEIGHT,
         pepelogo_palettes,
+        1,
         1
     );
 }
@@ -148,6 +233,7 @@ void show_doge_splash(void) BANKED {
         bork_MAP_ATTRIBUTES_WIDTH,
         bork_MAP_ATTRIBUTES_HEIGHT,
         bork_palettes,
+        1,
         1
     );
 }
@@ -161,6 +247,7 @@ void show_bells_splash(void) BANKED {
         bellslogo_MAP_ATTRIBUTES_WIDTH,
         bellslogo_MAP_ATTRIBUTES_HEIGHT,
         bellslogo_palettes,
+        1,
         1
     );
 }
@@ -174,6 +261,7 @@ void show_offline_warning(void) BANKED {
         offlineonly_MAP_ATTRIBUTES_WIDTH,
         offlineonly_MAP_ATTRIBUTES_HEIGHT,
         offlineonly_palettes,
+        1,
         0
     );
 

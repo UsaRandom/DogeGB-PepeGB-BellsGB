@@ -4,7 +4,7 @@ CC = ./gbdk/bin/lcc
 # Compiler flags
 CFLAGS = -msm83:gb \
          -Wl-yt0x1B \
-         -Wl-yo16 \
+         -Wl-yo512 \
          -Wl-ya1 \
          -Wb-ext=.rel \
          -Wm-yC \
@@ -72,17 +72,28 @@ SRC = src/main.c \
       src/crypto/mnemonic.c \
       src/crypto/pbkdf2.c \
       src/crypto/sha512.c \
+      src/crypto/sha_block.s \
       src/crypto/sha512_transform.c \
       src/crypto/sha512_constants.c \
       src/crypto/hd_wallet.c \
       src/crypto/secp256k1.c \
+      src/crypto/bn_inv.c \
+      src/crypto/bn_mul.s \
+      src/crypto/mul_tables.s \
+      src/crypto/mul977_tab.s \
+      src/crypto/gpow_table.c \
+      src/crypto/gpow_load.c \
+      src/crypto/comb_load.c \
+      src/crypto/comb_mul.c \
       src/crypto/hmac.c \
       src/crypto/ripemd160.c \
       src/crypto/entropy_data.c \
       src/bitrot_rom.c \
+      src/bitrot_sum.s \
+      src/bitrot_crc.s \
       src/bitrot_save.c
 
-.PHONY: entropy test clean postclean assets savedata all doge pepe bells
+.PHONY: entropy test clean postclean assets savedata all doge pepe bells asm-test
 .DEFAULT_GOAL := doge
 
 bank = 6
@@ -123,6 +134,11 @@ test:
 	cd test && make
 	python3 test/test_crypto.py 30
 
+# SM83 ROM vs Python. Default is the short crypto checks.
+# `make asm-test ADDRESS=1` runs the full address generation.
+asm-test:
+	python3 test/emu/check.py $(if $(ADDRESS),address,quick)
+
 entropy:
 	python3 tools/generate_entropy.py
 
@@ -136,6 +152,7 @@ build/%GB.gb: $(SRC) build/wallet_sram.o
 	$(eval STEM_LOWER := $(shell echo $* | tr A-Z a-z))
 	$(eval DEFAULT_MODE := $(if $(findstring doge,$(STEM_LOWER)),0,$(if $(findstring pepe,$(STEM_LOWER)),2,$(if $(findstring bells,$(STEM_LOWER)),1,0))))
 	$(CC) $(CFLAGS) $(OPTFLAGS) -o $@ $^
+	python3 tools/patch_comb.py $@
 	python3 tools/patch_bitrot.py $@
 
 doge: test savedata build/DogeGB.gb

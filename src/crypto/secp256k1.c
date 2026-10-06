@@ -3,6 +3,27 @@
 #include <string.h>
 #include "progress.h"
 
+extern const uint8_t gpow_table[16384];
+
+#ifdef __SDCC
+extern uint8_t *bn_mul_pa;
+extern uint8_t *bn_mul_pb;
+extern uint8_t bn_mul_prod[64];
+extern uint8_t bn_saved_bank;
+extern const uint8_t mul977_lo[];
+extern const uint8_t mul977_mid[];
+extern const uint8_t mul977_hi[];
+void bn_mul256_asm(void);
+void bn_sqr256_asm(void);
+void bn_inv_pub(uint8_t *r, const uint8_t *a) BANKED;
+void gpow_load(uint8_t k, uint8_t *dst);
+void comb_schedule(const uint8_t *privkey) BANKED;
+#else
+static void gpow_load(uint8_t k, uint8_t *dst) {
+    memcpy(dst, gpow_table + ((unsigned)k << 6), 64);
+}
+#endif
+
 // 256-bit big integer (32 bytes, big-endian)
 typedef uint8_t bn256[32];
 
@@ -94,104 +115,70 @@ static void bn_sub_mod(bn256 a, const bn256 b) {
     }
 }
 
-// secp256k1 complement: c = 2^32 + 977 = 0x1000003d1
-// In big-endian 5 bytes: {0x01, 0x00, 0x00, 0x03, 0xd1}
-static const uint8_t SECP256K1_C[5] = {0x01, 0x00, 0x00, 0x03, 0xd1};
-
-// Modular reduction for secp256k1
-// p = 2^256 - c, so 2^256 ≡ c (mod p)
-// For 512-bit product: result = low + high * c (mod p)
+/* p = 2^256 - 2^32 - 977, so x = hi*2^256 + lo ≡ lo + hi*2^32 + hi*977 (mod p). */
 static void bn_reduce_secp256k1(uint8_t *prod, bn256 r) {
-    static uint8_t full[64];  // Working buffer
-    int i, j;
-    uint32_t carry;
-    
-    // Copy product to working buffer
-    for (i = 0; i < 64; i++) full[i] = prod[i];
-    
-    // Repeat reduction until high part is zero
-    // Each iteration reduces by ~224 bits, so 3 iterations max
-    for (int iter = 0; iter < 3; iter++) {
-        // Check if high part (full[0..31]) is zero
+    static uint8_t acc[40];
+    static uint8_t hi[32];
+    int iter, i, j;
+    uint16_t carry;
+
+    for (iter = 0; iter < 6; iter++) {
         int high_zero = 1;
         for (i = 0; i < 32; i++) {
-            if (full[i]) { high_zero = 0; break; }
+            if (prod[i]) { high_zero = 0; break; }
         }
         if (high_zero) break;
-        
-        // Multiply high[0..31] by c[0..4] and add to low[32..63]
-        // Result goes into a temp buffer, then we copy back
-        static uint8_t temp[37];  // 32 + 5 = 37 bytes max
-        memset(temp, 0, 37);
-        
-        // Schoolbook multiply: high * c
-        for (i = 31; i >= 0; i--) {
-            carry = 0;
-            for (j = 4; j >= 0; j--) {
-                // temp position: i + j + 1 maps to temp[0..36]
-                // But we want high[i] * c[j] to go to position (31-i) + (4-j) from LSB
-                // In big-endian: position = i + j + 1 relative to temp[0]
-                int pos = i + j + 1;
-                if (pos < 37) {
-                    uint32_t v = temp[pos] + (uint32_t)full[i] * SECP256K1_C[j] + carry;
-                    temp[pos] = v & 0xFF;
-                    carry = v >> 8;
-                }
-            }
-            // Propagate carry
-            for (int k = i; k >= 0 && carry; k--) {
-                uint32_t v = temp[k] + carry;
-                temp[k] = v & 0xFF;
-                carry = v >> 8;
-            }
-        }
-        
-        // Now add temp[5..36] to full[32..63] (the low part)
-        // temp[0..4] is overflow that goes to full[27..31] area
-        // Actually, temp represents high * c which is at most 256+40 = 296 bits
-        // temp[0..36] in big-endian, we need to add this to full[32..63]
-        // But temp is 37 bytes and full[32..63] is 32 bytes
-        // temp[5..36] (32 bytes) aligns with full[32..63]
-        // temp[0..4] (5 bytes) is overflow
-        
-        // Clear high part of full
-        for (i = 0; i < 32; i++) full[i] = 0;
-        
-        // Add temp[5..36] to full[32..63]
+
+        for (i = 0; i < 32; i++) hi[i] = prod[31 - i];
+        memset(acc, 0, 40);
+        for (i = 0; i < 32; i++) acc[i] = prod[63 - i];
+
         carry = 0;
-        for (i = 36; i >= 5; i--) {
-            uint32_t v = full[i + 32 - 5] + temp[i] + carry;
-            full[i + 32 - 5] = v & 0xFF;
-            carry = v >> 8;
+        for (i = 0; i < 32; i++) {
+            carry += (uint16_t)acc[i + 4] + hi[i];
+            acc[i + 4] = (uint8_t)carry;
+            carry >>= 8;
         }
-        
-        // Add temp[0..4] (overflow) to full[27..31]
-        for (i = 4; i >= 0; i--) {
-            uint32_t v = full[27 + i] + temp[i] + carry;
-            full[27 + i] = v & 0xFF;
-            carry = v >> 8;
+        for (j = 36; carry && j < 40; j++) {
+            carry += acc[j];
+            acc[j] = (uint8_t)carry;
+            carry >>= 8;
         }
-        
-        // Propagate any remaining carry
-        for (i = 26; i >= 0 && carry; i--) {
-            uint32_t v = full[i] + carry;
-            full[i] = v & 0xFF;
-            carry = v >> 8;
+
+        carry = 0;
+        for (i = 0; i < 32; i++) {
+            uint8_t b = hi[i];
+#ifdef __SDCC
+            uint16_t s = (uint16_t)mul977_lo[b] + acc[i] + (uint8_t)carry;
+            acc[i] = (uint8_t)s;
+            carry = (uint16_t)((s >> 8) + mul977_mid[b] + (carry >> 8)
+                               + ((uint16_t)mul977_hi[b] << 8));
+#else
+            uint32_t full = (uint32_t)b * 977u + acc[i] + carry;
+            acc[i] = (uint8_t)full;
+            carry = (uint16_t)(full >> 8);
+#endif
         }
+        for (j = 32; carry && j < 40; j++) {
+            carry += acc[j];
+            acc[j] = (uint8_t)carry;
+            carry >>= 8;
+        }
+
+        memset(prod, 0, 64);
+        for (i = 0; i < 40; i++) prod[63 - i] = acc[i];
     }
-    
-    // Copy low 256 bits to result
-    for (i = 0; i < 32; i++) r[i] = full[32 + i];
-    
-    // Final reduction: subtract p while r >= p
-    for (i = 0; i < 3; i++) {
+
+    for (i = 0; i < 32; i++) r[i] = prod[32 + i];
+
+    for (i = 0; i < 4; i++) {
         if (bn_cmp(r, SECP256K1_P) >= 0) {
             uint16_t borrow = 0;
-            for (int j = 31; j >= 0; j--) {
-                int16_t diff = r[j] - SECP256K1_P[j] - borrow;
+            for (j = 31; j >= 0; j--) {
+                int16_t diff = (int16_t)r[j] - SECP256K1_P[j] - (int16_t)borrow;
                 if (diff < 0) { diff += 256; borrow = 1; }
                 else borrow = 0;
-                r[j] = diff;
+                r[j] = (uint8_t)diff;
             }
         } else {
             break;
@@ -199,57 +186,76 @@ static void bn_reduce_secp256k1(uint8_t *prod, bn256 r) {
     }
 }
 
-// r = a * b (mod p) - schoolbook multiplication with secp256k1 reduction
+/* r = a * b (mod p). The device multiply is the bank-0 table routine.
+   Operands are copied to WRAM first: the table bank covers 0x4000-0x7FFF,
+   so a const in that window cannot be read while the table is mapped. */
 static void bn_mul_mod(bn256 r, const bn256 a, const bn256 b) {
+#ifdef __SDCC
+    static uint8_t mul_a[32], mul_b[32];
+    memcpy(mul_a, a, 32);
+    memcpy(mul_b, b, 32);
+    bn_mul_pa = mul_a;
+    bn_mul_pb = mul_b;
+    bn_saved_bank = _current_bank;
+    bn_mul256_asm();
+    bn_reduce_secp256k1(bn_mul_prod, r);
+#else
     static uint8_t prod[64];
     int i, j;
     uint32_t carry;
-    
+
     memset(prod, 0, 64);
-    
-    // Schoolbook multiply
     for (i = 31; i >= 0; i--) {
         carry = 0;
         for (j = 31; j >= 0; j--) {
             uint32_t sum = prod[i + j + 1] + (uint32_t)a[i] * b[j] + carry;
-            prod[i + j + 1] = sum & 0xFF;
+            prod[i + j + 1] = (uint8_t)(sum & 0xFF);
             carry = sum >> 8;
         }
-        prod[i] += carry;
-    }
-    
-    // Reduce mod p
-    bn_reduce_secp256k1(prod, r);
-}
-
-// r = a^2 (mod p)
-static void bn_sqr_mod(bn256 r, const bn256 a) {
-    bn_mul_mod(r, a, a);
-}
-
-// r = a^(-1) (mod p) using Fermat's little theorem: a^(p-2) mod p
-static void bn_inv_mod(bn256 r, const bn256 a) {
-    static bn256 base, exp, result;
-    bn_copy(base, a);
-    
-    // exp = p - 2
-    bn_copy(exp, SECP256K1_P);
-    exp[31] -= 2;
-    
-    // result = 1
-    bn_zero(result);
-    result[31] = 1;
-    
-    // Square-and-multiply
-    for (int i = 0; i < 256; i++) {
-        int byte_idx = 31 - (i / 8);
-        int bit_idx = i % 8;
-        if (exp[byte_idx] & (1 << bit_idx)) {
-            bn_mul_mod(result, result, base);
+        {
+            uint32_t sum = (uint32_t)prod[i] + carry;
+            int k = i;
+            while (k >= 0) {
+                if (k != i) sum += prod[k];
+                prod[k] = (uint8_t)sum;
+                sum >>= 8;
+                if (sum == 0) break;
+                k--;
+            }
         }
-        bn_sqr_mod(base, base);
     }
-    bn_copy(r, result);
+    bn_reduce_secp256k1(prod, r);
+#endif
+}
+
+// r = a^2 (mod p). The device square is triangular; the host uses the multiply.
+static void bn_sqr_mod(bn256 r, const bn256 a) {
+#ifdef __SDCC
+    static uint8_t sqr_a[32];
+    memcpy(sqr_a, a, 32);
+    bn_mul_pa = sqr_a;
+    bn_saved_bank = _current_bank;
+    bn_sqr256_asm();
+    bn_reduce_secp256k1(bn_mul_prod, r);
+#else
+    bn_mul_mod(r, a, a);
+#endif
+}
+
+/* Banked entries so the addition-chain inverse can live outside bank 4.
+   Same-bank field math keeps calling bn_mul_mod / bn_sqr_mod directly. */
+void bn_mul_pub(uint8_t *r, const uint8_t *a, const uint8_t *b) BANKED {
+    bn_mul_mod(r, a, b);
+}
+
+void bn_sqr_pub(uint8_t *r, const uint8_t *a) BANKED {
+    bn_sqr_mod(r, a);
+}
+
+// r = a^(-1) (mod p). Chain is checked against a^(p-2) mod p.
+void bn_inv_pub(uint8_t *r, const uint8_t *a) BANKED;
+static void bn_inv_mod(bn256 r, const bn256 a) {
+    bn_inv_pub(r, a);
 }
 
 // Check if point is at infinity (Z == 0)
@@ -324,30 +330,23 @@ static int bn_is_zero(const bn256 a) {
     return 1;
 }
 
-// Point addition R = P + G (G is generator, with Z2=1)
-// Using standard mixed Jacobian-affine addition
-static void point_add_g(void) {
+/* Mixed Jacobian + affine add. ax, ay stay in WRAM for the whole call. */
+static void point_add_affine(const bn256 ax, const bn256 ay) {
     static bn256 U2, S2, H, HH, HHH, r_val, V, tmp;
-    
-    // If P is infinity, R = G
+
     if (is_infinity()) {
-        bn_copy(px, SECP256K1_GX);
-        bn_copy(py, SECP256K1_GY);
+        bn_copy(px, ax);
+        bn_copy(py, ay);
         bn_zero(pz);
         pz[31] = 1;
         return;
     }
-    
-    // Mixed addition: P + G where G has Z=1
-    // U1 = X1 (P.x in Jacobian is already "U1" conceptually)
-    // U2 = Gx * Z1^2
-    bn_sqr_mod(tmp, pz);              // tmp = Z1^2
-    bn_mul_mod(U2, SECP256K1_GX, tmp); // U2 = Gx * Z1^2
-    
-    // S1 = Y1 (P.y in Jacobian is already "S1" conceptually)
-    // S2 = Gy * Z1^3
-    bn_mul_mod(S2, tmp, pz);          // S2 = Z1^3 (reusing S2 temporarily)
-    bn_mul_mod(S2, SECP256K1_GY, S2); // S2 = Gy * Z1^3
+
+    bn_sqr_mod(tmp, pz);
+    bn_mul_mod(U2, ax, tmp);
+
+    bn_mul_mod(S2, tmp, pz);
+    bn_mul_mod(S2, ay, S2);
     
     // H = U2 - U1 = U2 - px
     bn_copy(H, U2);
@@ -418,23 +417,43 @@ void test_mul(uint8_t *result) BANKED {
     for (int i = 0; i < 32; i++) result[i] = gx_sq[i];
 }
 
+#ifdef __SDCC
+/* Y = P - Y. Affine Y is in 1..P-1, so this is the point negation. */
+static void negate_y(uint8_t *y) {
+    static bn256 tmp;
+    bn_copy(tmp, SECP256K1_P);
+    bn_sub_mod(tmp, y);
+    bn_copy(y, tmp);
+}
+
+void secp_mix_add(uint8_t *xy, uint8_t neg) BANKED {
+    if (neg) negate_y(xy + 32);
+    point_add_affine(xy, xy + 32);
+}
+#endif
+
 // Public key generation: pubkey = privkey * G
 void secp256k1_pubkey(const uint8_t *privkey, uint8_t *pubkey) BANKED {
-    // Initialize result to point at infinity
     bn_zero(px);
     bn_zero(py);
     bn_zero(pz);
-    
-    // Double-and-add from MSB
+
+#ifdef __SDCC
+    /* Signed 7-bit comb. The schedule is in bank 30. Still 256 progress ticks. */
+    comb_schedule(privkey);
+#else
+    /* Host reference: one add of 2^i * G per set bit. */
+    static uint8_t gxy[64];
     for (int i = 0; i < 256; i++) {
-        point_double();
         int byte_idx = i / 8;
         int bit_idx = 7 - (i % 8);
         if (privkey[byte_idx] & (1 << bit_idx)) {
-            point_add_g();
+            gpow_load((uint8_t)(255 - i), gxy);
+            point_add_affine(gxy, gxy + 32);
         }
         add_progress(WEIGHT_SECP256k1);
     }
+#endif
     
     // Convert to affine coordinates
     static bn256 ax, ay;
