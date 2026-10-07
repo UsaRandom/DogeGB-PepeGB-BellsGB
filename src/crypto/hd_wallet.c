@@ -9,6 +9,7 @@
 #include "ripemd160.h"
 
 #include <gb/gb.h>
+#include "progress.h"
 
 static void my_memcpy(uint8_t *dest, const uint8_t *src, int len) {
     for (int i = 0; i < len; i++) {
@@ -143,6 +144,7 @@ void seed_to_addresses(
     sha256_update(&ctx, compressed_pub, 33);
     sha256_final(&ctx, sha_hash);
     ripemd160(sha_hash, 32, hash160);
+    add_progress(WEIGHT_HASH160);
 
     const struct {
         uint8_t version;
@@ -201,5 +203,6 @@ void seed_to_addresses(
         for (int i = 0; i < zeros; i++) *out++ = '1';
         for (int i = b58_len - 1; i >= 0; i--) *out++ = base58_alphabet[b58[i]];
         *out = '\0';
+        add_progress(WEIGHT_ADDR_ENCODE);
     }
 }

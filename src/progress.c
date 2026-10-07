@@ -9,6 +9,8 @@
 #include <gbdk/metasprites.h>
 #include "states.h"
 #include "bitrot_rom.h"
+#include <wallet.h>
+#include <gb/cgb.h>
 
 #pragma bank 6
 
@@ -24,10 +26,33 @@ uint8_t total_progress = 0;
 unsigned long progress_accum = 0UL;
 unsigned long total_work = 0UL;
 static unsigned long work_total = 1UL;
+uint8_t progress_on = 0;
 
 extern AppState current_state;
 extern volatile uint8_t crc_state[4];
 extern volatile uint16_t boot_sum;
+extern uint8_t current_mode;
+
+static palette_color_t bar_pal[4];
+
+/* Fill is palette index 1. Gold, green, or bronze follows the coin. */
+static void use_coin_bar_color(void) {
+    switch (current_mode) {
+        case PEPEGB:
+            bar_pal[1] = RGB8(73, 177, 55);
+            break;
+        case BELLSGB:
+            bar_pal[1] = RGB8(214, 137, 50);
+            break;
+        default:
+            bar_pal[1] = RGB8(247, 183, 22);
+            break;
+    }
+    bar_pal[0] = RGB8(255, 255, 255);
+    bar_pal[2] = RGB8(0, 0, 0);
+    bar_pal[3] = RGB8(255, 255, 255);
+    set_bkg_palette(6, 1, bar_pal);
+}
 
 
 
@@ -76,7 +101,7 @@ void add_progress(uint16_t weight) BANKED
 {
     uint8_t drawn;
 
-    if (total_progress >= BAR_TOTAL_PX || work_total == 0UL) return;
+    if (!progress_on || total_progress >= BAR_TOTAL_PX || work_total == 0UL) return;
 
     total_work += (unsigned long)weight;
     progress_accum += (unsigned long)weight * (unsigned long)BAR_TOTAL_PX;
@@ -87,13 +112,9 @@ void add_progress(uint16_t weight) BANKED
         total_progress++;
     }
 
-    if (drawn == total_progress) return;
+    progress_ride_tick(total_work, work_total);
 
-    if (total_progress >= BAR_TOTAL_PX && current_state != STATE_TESTING) {
-        gotoxy(0, 8);
-        printf("     Just a bit    \n");
-        printf("       longer      ");
-    }
+    if (drawn == total_progress) return;
 
     update_progress(total_progress);
 }
@@ -122,8 +143,9 @@ void show_progress_page() BANKED {
     if (current_state == STATE_TESTING) {
         work_total += banks * (unsigned long)WEIGHT_SUM_BANK;
     }
-    
-    set_bkg_palette(6, 1, progress_bar_palettes);
+    progress_on = 1;
+
+    use_coin_bar_color();
 
     set_bkg_data(TILE_BASE, progress_bar_TILE_COUNT, progress_bar_tiles);
 
@@ -136,14 +158,9 @@ void show_progress_page() BANKED {
         VBK_REG = 0;
     }
 
-    if(current_state != STATE_TESTING)
-    {
-        gotoxy(1,1);
+    if (current_state != STATE_TESTING) {
+        gotoxy(1, 1);
         printf("   Address Gen.");
-
-        gotoxy(0,8);
-        printf("   This will take\n");
-        printf("    a long time.");
     }
 
     unsigned char top_empty[BAR_TOTAL_TILES];
@@ -163,6 +180,8 @@ void show_progress_page() BANKED {
     set_bkg_tiles(BAR_X, BAR_Y,     BAR_TOTAL_TILES, 1, top_empty);
     set_bkg_tiles(BAR_X, BAR_Y + 1, BAR_TOTAL_TILES, 1, bot_empty);
 
+    progress_ride_begin(current_state != STATE_TESTING);
+    progress_ride_tick(0UL, work_total);
 }
 
 /* Boot word-sum screen. Same bar as address gen, without that page's

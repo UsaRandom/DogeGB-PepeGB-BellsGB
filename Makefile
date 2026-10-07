@@ -65,6 +65,7 @@ SRC = src/main.c \
       src/pin.c \
       src/draw.c \
       src/progress.c \
+      src/progress_ride.c \
       src/crypto/bip39_wordlist.c \
       src/crypto/bip39_words_1.c \
       src/crypto/bip39_words_2.c \

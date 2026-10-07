@@ -1,6 +1,7 @@
 
 #include "bitrot_save.h"
 #include "sha256.h"
+#include "progress.h"
 
 #pragma bank 4
 
@@ -61,5 +62,6 @@ bool validate_checksum(char* address) BANKED {
         }
     }
 
+    add_progress(WEIGHT_ADDR_CHECK);
     return returnVal;
 }

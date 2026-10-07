@@ -63,8 +63,6 @@ void handle_test_menu() BANKED {
 
     draw_text(1, "Testing!", 6);
 
-    draw_text(4, "This will take", 3);
-    draw_text(5, "a long time.", 4);
     draw_text(7, "ChkSum...", 1);
 
     bool failed = false;
@@ -110,5 +108,6 @@ void handle_test_menu() BANKED {
         stir_entropy();
     }
 
+    progress_ride_end();
     current_state = STATE_SLOT_SELECTION;
 }

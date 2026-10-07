@@ -100,6 +100,7 @@ void handle_generate_address(void) BANKED {
 
     // perform full crc32 integrity check
     if(!rom_verify_integrity()){
+        progress_ride_end();
         gotoxy(0,8);
         printf("   Corrupted ROM!\n");
         printf("                 \n");
@@ -129,6 +130,7 @@ void handle_generate_address(void) BANKED {
         __asm__("ei");
         #endif
 
+        progress_ride_end();
         gotoxy(0,8);
         printf("     !!FAILED!!   \n");
         printf("   Please Report!\n");
@@ -176,7 +178,7 @@ void handle_generate_address(void) BANKED {
     __asm__("ei");
     #endif
 
-
+    progress_ride_end();
     current_state = STATE_WALLET_MENU;
 }
 
