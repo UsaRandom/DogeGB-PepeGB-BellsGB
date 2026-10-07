@@ -7,6 +7,7 @@
 #include <draw.h>
 
 #include "src/assets/progress_bar.h"
+#include "progress.h"
 #include "src/assets/cheems_idle.h"
 #include "src/assets/cheems_bonk.h"
 #include "src/assets/cheems_selfbonk.h"
@@ -307,7 +308,7 @@ uint8_t* bonktime(uint8_t mode) BANKED {
     set_bkg_data(dpadbutton_right_TILE_ORIGIN, dpadbutton_right_TILE_COUNT, dpadbutton_right_tiles); 
     set_bkg_data(dpadbutton_left_TILE_ORIGIN, dpadbutton_left_TILE_COUNT, dpadbutton_left_tiles);
 
-    set_bkg_palette(6, 1, progress_bar_palettes);
+    use_coin_bar_color();
     set_bkg_data(TILE_BASE, progress_bar_TILE_COUNT, progress_bar_tiles);
 
     char* gameTitle = "     BONK TIME!\0";

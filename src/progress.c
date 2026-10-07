@@ -21,7 +21,9 @@ uint8_t total_progress = 0;
 #define BAR_X 1
 #define BAR_Y 15
 #define BAR_TOTAL_TILES 18      
-#define BAR_TOTAL_PX (BAR_TOTAL_TILES * 8)  
+#define BAR_TOTAL_PX (BAR_TOTAL_TILES * 8)
+
+static uint8_t bar_draw_y = BAR_Y;
 
 unsigned long progress_accum = 0UL;
 unsigned long total_work = 0UL;
@@ -36,7 +38,7 @@ extern uint8_t current_mode;
 static palette_color_t bar_pal[4];
 
 /* Fill is palette index 1. Gold, green, or bronze follows the coin. */
-static void use_coin_bar_color(void) {
+void use_coin_bar_color(void) BANKED {
     switch (current_mode) {
         case PEPEGB:
             bar_pal[1] = RGB8(73, 177, 55);
@@ -90,8 +92,8 @@ void update_progress(uint8_t progress) BANKED {
         bot_row[tile_pos] = TILE_BASE + (base_rel + 23) + level;
     }
 
-    set_bkg_tiles(BAR_X, BAR_Y,     BAR_TOTAL_TILES, 1, top_row);
-    set_bkg_tiles(BAR_X, BAR_Y + 1, BAR_TOTAL_TILES, 1, bot_row);
+    set_bkg_tiles(BAR_X, bar_draw_y,     BAR_TOTAL_TILES, 1, top_row);
+    set_bkg_tiles(BAR_X, bar_draw_y + 1, BAR_TOTAL_TILES, 1, bot_row);
 
 
 }
@@ -144,6 +146,7 @@ void show_progress_page() BANKED {
         work_total += banks * (unsigned long)WEIGHT_SUM_BANK;
     }
     progress_on = 1;
+    bar_draw_y = BAR_Y;
 
     use_coin_bar_color();
 
@@ -184,16 +187,16 @@ void show_progress_page() BANKED {
     progress_ride_tick(0UL, work_total);
 }
 
-/* Boot word-sum screen. Same bar as address gen, without that page's
-   counters or copy. progress is 0..144 pixels. */
+/* Boot word-sum screen. Same bar as address gen, drawn in the middle,
+   in the coin color. progress is 0..144 pixels. */
 void prepare_rom_check_bar(void) BANKED {
-    set_bkg_palette(6, 1, progress_bar_palettes);
+    bar_draw_y = BOOT_BAR_Y;
+    use_coin_bar_color();
     set_bkg_data(TILE_BASE, progress_bar_TILE_COUNT, progress_bar_tiles);
 
     if (_cpu == CGB_TYPE) {
         VBK_REG = 1;
-        fill_bkg_rect(0, 0, 20, 3, 1);
-        fill_bkg_rect(BAR_X, BAR_Y, BAR_TOTAL_TILES, 2, 6);
+        fill_bkg_rect(BAR_X, bar_draw_y, BAR_TOTAL_TILES, 2, 6);
         VBK_REG = 0;
     }
     update_progress(0);

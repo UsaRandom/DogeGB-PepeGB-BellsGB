@@ -7,6 +7,11 @@ void show_progress_page() BANKED;
 
 void prepare_rom_check_bar(void) BANKED;
 void update_progress(uint8_t progress) BANKED;
+void use_coin_bar_color(void) BANKED;
+
+/* Boot check: label on row 7, bar on rows 9-10. Address gen keeps BAR_Y. */
+#define BOOT_BAR_Y 9
+#define BOOT_CHECK_TEXT_Y 7
 
 /* These two draw on the same bar as address generation. */
 bool quick_rom_verify_integrity(void) BANKED;

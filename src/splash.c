@@ -48,11 +48,48 @@ static void scan_slice(void) {
     }
 }
 
-static uint8_t scan_bar_px(void) {
-    uint16_t done = ((uint16_t)scan_bank << 1) + scan_half;
-    uint16_t px = (uint16_t)((done * 55u) >> 8);
-    if (px > 144u) px = 144u;
-    return (uint8_t)px;
+static uint16_t scan_mark;
+static uint16_t scan_span;
+static uint16_t scan_acc;
+static uint16_t scan_applied;
+static uint8_t scan_px;
+
+static uint16_t scan_done_slices(void) {
+    return ((uint16_t)scan_bank << 1) + scan_half;
+}
+
+/* The splash screens already ran part of the sum. The bar covers only
+   what is left, and it is drawn from empty. */
+static void scan_bar_reset(void) {
+    uint16_t total = ((uint16_t)scan_last + 1u) << 1;
+    uint16_t done = scan_done_slices();
+
+    scan_mark = done;
+    scan_applied = 0;
+    scan_acc = 0;
+    scan_px = 0;
+    scan_span = (done >= total) ? 0 : (uint16_t)(total - done);
+}
+
+static void scan_bar_sync(void) {
+    uint16_t done;
+    uint16_t advanced;
+
+    if (scan_span == 0) {
+        scan_px = 144;
+        return;
+    }
+    done = scan_done_slices();
+    if (done <= scan_mark) return;
+    advanced = done - scan_mark;
+    while (scan_applied < advanced) {
+        scan_acc += 144;
+        while (scan_acc >= scan_span && scan_px < 144) {
+            scan_acc -= scan_span;
+            scan_px++;
+        }
+        scan_applied++;
+    }
 }
 
 static void scan_frame(void) {
@@ -71,22 +108,24 @@ static void show_rom_check_screen(void) {
         OBP1_REG = 0xE4;
     }
     prepare_rom_check_bar();
-    gotoxy(4, 1);
+    gotoxy(4, BOOT_CHECK_TEXT_Y);
     printf("Checking ROM");
+    scan_bar_reset();
 
     vsync();
-    update_progress(scan_bar_px());
+    update_progress(0);
 
     while (!scan_finished()) {
         for (n = 0; n < 8 && !scan_finished(); n++) scan_slice();
         vsync();
-        update_progress(scan_bar_px());
+        scan_bar_sync();
+        update_progress(scan_px);
     }
     vsync();
     update_progress(144);
 
     if (boot_sum != scan_stored) {
-        gotoxy(3, 8);
+        gotoxy(2, 12);
         printf("Corrupted ROM!");
         while (1) vsync();
     }
