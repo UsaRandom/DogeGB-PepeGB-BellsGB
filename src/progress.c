@@ -8,6 +8,7 @@
 #include "src/assets/progress_bar.h"
 #include <gbdk/metasprites.h>
 #include "states.h"
+#include "bitrot_rom.h"
 
 #pragma bank 6
 
@@ -20,13 +21,13 @@ uint8_t total_progress = 0;
 #define BAR_TOTAL_TILES 18      
 #define BAR_TOTAL_PX (BAR_TOTAL_TILES * 8)  
 
-const unsigned long TOTAL_WORK_UL = (unsigned long)2048UL * WEIGHT_PBKDF2 +
-                                    3UL * 256UL * WEIGHT_SECP256k1; 
-
 unsigned long progress_accum = 0UL;
 unsigned long total_work = 0UL;
+static unsigned long work_total = 1UL;
 
 extern AppState current_state;
+extern volatile uint8_t crc_state[4];
+extern volatile uint16_t boot_sum;
 
 
 
@@ -73,30 +74,28 @@ void update_progress(uint8_t progress) BANKED {
 
 void add_progress(uint16_t weight) BANKED
 {
-    if (total_progress >= BAR_TOTAL_PX) return;
+    uint8_t drawn;
+
+    if (total_progress >= BAR_TOTAL_PX || work_total == 0UL) return;
 
     total_work += (unsigned long)weight;
     progress_accum += (unsigned long)weight * (unsigned long)BAR_TOTAL_PX;
 
-
-    if (progress_accum >= TOTAL_WORK_UL) {
-        progress_accum -= TOTAL_WORK_UL;
+    drawn = total_progress;
+    while (progress_accum >= work_total && total_progress < BAR_TOTAL_PX) {
+        progress_accum -= work_total;
         total_progress++;
-
-        if (total_progress > BAR_TOTAL_PX) {
-            total_progress = BAR_TOTAL_PX;
-        }
-
-
-        if(total_work >= TOTAL_WORK_UL && current_state != STATE_TESTING){
-            gotoxy(0,8);
-            printf("     Just a bit    \n");
-            printf("       longer      ");
-        }
-
-        update_progress(total_progress);
     }
 
+    if (drawn == total_progress) return;
+
+    if (total_progress >= BAR_TOTAL_PX && current_state != STATE_TESTING) {
+        gotoxy(0, 8);
+        printf("     Just a bit    \n");
+        printf("       longer      ");
+    }
+
+    update_progress(total_progress);
 }
 
 
@@ -108,11 +107,21 @@ uint8_t text_x_pos(const char* str) {
 
 
 void show_progress_page() BANKED {
+    uint16_t last = 0;
+    unsigned long banks;
+
     vsync();
     clear_screen();
     total_work = 0UL;
     total_progress = 0;
     progress_accum = 0;
+
+    read_trailer(&last, 0, 0);
+    banks = (unsigned long)last + 1UL;
+    work_total = ADDRESS_WORK_UL + banks * (unsigned long)WEIGHT_CRC_BANK;
+    if (current_state == STATE_TESTING) {
+        work_total += banks * (unsigned long)WEIGHT_SUM_BANK;
+    }
     
     set_bkg_palette(6, 1, progress_bar_palettes);
 
@@ -169,4 +178,43 @@ void prepare_rom_check_bar(void) BANKED {
         VBK_REG = 0;
     }
     update_progress(0);
+}
+
+/* Word sum of banks 0..last_used. Two half-bank slices are one bank.
+   Each bank moves the bar by the measured checksum time. */
+bool quick_rom_verify_integrity(void) BANKED {
+    uint16_t last = 0;
+    uint16_t stored = 0;
+    uint16_t b;
+
+    read_trailer(&last, &stored, 0);
+    boot_sum = 0;
+    for (b = 0; b <= last; b++) {
+        rom_sum_slice(b, 1);
+        rom_sum_slice(b, 0);
+        add_progress(WEIGHT_SUM_BANK);
+    }
+    return boot_sum == stored;
+}
+
+/* CRC32 of the same banks. The complement matches patch_bitrot.py. */
+bool rom_verify_integrity(void) BANKED {
+    uint16_t last = 0;
+    uint32_t stored = 0;
+    uint16_t b;
+    uint32_t computed;
+
+    read_trailer(&last, 0, &stored);
+    rom_crc_open();
+    for (b = 0; b <= last; b++) {
+        rom_crc_bank(b);
+        add_progress(WEIGHT_CRC_BANK);
+    }
+    rom_crc_close();
+
+    computed = (uint32_t)crc_state[0]
+             | ((uint32_t)crc_state[1] << 8)
+             | ((uint32_t)crc_state[2] << 16)
+             | ((uint32_t)crc_state[3] << 24);
+    return (~computed) == stored;
 }

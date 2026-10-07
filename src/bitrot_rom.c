@@ -60,18 +60,13 @@ void read_trailer(uint16_t *last_used, uint16_t *checksum, uint32_t *crc) {
     }
 }
 
-/* CRC32 of banks 0..last_used. Same polynomial, init, and final
-   complement as patch_bitrot.py. The table is bank 11, copied into
-   SRAM above the save block for the scan. */
-bool rom_verify_integrity(void)
+/* CRC32 of one bank. The table is bank 11, copied into SRAM above
+   the save block. Call open, then bank 0..last_used, then close.
+   Same polynomial and init as patch_bitrot.py. The complement is
+   the caller's job so this file stays out of the progress bar. */
+void rom_crc_open(void)
 {
     uint8_t saved_bank = _current_bank;
-    uint32_t stored_crc;
-    uint32_t computed_crc;
-    uint16_t last_used_bank;
-    uint16_t b;
-
-    read_trailer(&last_used_bank, 0, &stored_crc);
 
     ENABLE_RAM_MBC5;
     __critical {
@@ -84,22 +79,24 @@ bool rom_verify_integrity(void)
     crc_state[1] = 0xFF;
     crc_state[2] = 0xFF;
     crc_state[3] = 0xFF;
+}
+
+void rom_crc_bank(uint16_t bank)
+{
+    uint8_t saved_bank = _current_bank;
 
     __critical {
-        rom_restore(0);
-        crc_ptr = 0x0000;
+        if (bank == 0) rom_restore(0);
+        else rom_select(bank);
+        crc_ptr = (bank == 0) ? 0x0000 : 0x4000;
         crc_win();
         rom_restore(saved_bank);
     }
+}
 
-    for (b = 1; b <= last_used_bank; b++) {
-        __critical {
-            rom_select(b);
-            crc_ptr = 0x4000;
-            crc_win();
-            rom_restore(saved_bank);
-        }
-    }
+void rom_crc_close(void)
+{
+    uint8_t saved_bank = _current_bank;
 
     __critical {
         rom_select(11);
@@ -107,17 +104,10 @@ bool rom_verify_integrity(void)
         rom_restore(saved_bank);
     }
     DISABLE_RAM_MBC5;
-
-    computed_crc = (uint32_t)crc_state[0]
-                 | ((uint32_t)crc_state[1] << 8)
-                 | ((uint32_t)crc_state[2] << 16)
-                 | ((uint32_t)crc_state[3] << 24);
-    computed_crc = ~computed_crc;
-    return computed_crc == stored_crc;
 }
 
 /* 128 passes is half a bank, about 10 ms. Short enough to sit in one
-   frame of the logo fade. boot_passes 0 in the full check is 256. */
+   frame of the logo fade. A full bank is this call twice. */
 void rom_sum_slice(uint16_t bank, uint8_t first_half) {
     uint8_t saved = _current_bank;
 
@@ -133,32 +123,4 @@ void rom_sum_slice(uint16_t bank, uint8_t first_half) {
     }
 }
 
-// Boot integrity check. Same banks as the trailer coverage.
-bool quick_rom_verify_integrity(void) {
-    uint8_t saved_bank = _current_bank;
-    uint16_t last_used_bank;
-    uint16_t stored_checksum;
-    uint16_t b;
 
-    read_trailer(&last_used_bank, &stored_checksum, 0);
-    boot_sum = 0;
-    boot_passes = 0;
-
-    __critical {
-        rom_restore(0);
-        boot_ptr = 0x0000;
-        sum_win();
-        rom_restore(saved_bank);
-    }
-
-    for (b = 1; b <= last_used_bank; b++) {
-        __critical {
-            rom_select(b);
-            boot_ptr = 0x4000;
-            sum_win();
-            rom_restore(saved_bank);
-        }
-    }
-
-    return boot_sum == stored_checksum;
-}
