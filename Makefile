@@ -29,7 +29,6 @@ SRC = src/main.c \
       src/states_wallet_menu.c \
       src/states_wordtest.c \
       src/states_pin.c \
-      src/states_testing.c \
       src/assets/progress_bar.c \
       src/assets/keyboard.c \
       src/assets/keyboard_lightgrey.c \
@@ -92,6 +91,7 @@ SRC = src/main.c \
       src/bitrot_rom.c \
       src/bitrot_sum.s \
       src/bitrot_crc.s \
+      src/crypto/b58_decode.s \
       src/bitrot_save.c
 
 .PHONY: entropy test clean postclean assets savedata all doge pepe bells asm-test

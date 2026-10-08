@@ -7,8 +7,10 @@
 #include <draw.h>
 #include "src/assets/progress_bar.h"
 #include <gbdk/metasprites.h>
-#include "states.h"
 #include "bitrot_rom.h"
+#include "bitrot_save.h"
+#include "mnemonic.h"
+#include "hd_wallet.h"
 #include <wallet.h>
 #include <gb/cgb.h>
 
@@ -30,9 +32,7 @@ unsigned long total_work = 0UL;
 static unsigned long work_total = 1UL;
 uint8_t progress_on = 0;
 
-extern AppState current_state;
 extern volatile uint8_t crc_state[4];
-extern volatile uint16_t boot_sum;
 extern uint8_t current_mode;
 
 static palette_color_t bar_pal[4];
@@ -128,6 +128,30 @@ uint8_t text_x_pos(const char* str) {
     return (20 - len) / 2;
 }
 
+/* First byte after the save block. Slots end at 0xA92A and the CRC
+   scratch table starts at 0xAA00. A raw byte, not a linker symbol,
+   so it cannot shift the slots. 0xA5 means the known derivation
+   matched. 0x00 and 0xFF are a fresh cartridge. */
+#define ADDR_CHECK_ADDR 0xA92Au
+#define ADDR_CHECK_DONE 0xA5u
+
+static uint8_t addr_check_byte(void) {
+    uint8_t v;
+
+    ENABLE_RAM_MBC5;
+    SWITCH_RAM_MBC5(0);
+    v = *(volatile uint8_t *)ADDR_CHECK_ADDR;
+    DISABLE_RAM_MBC5;
+    return v;
+}
+
+static void mark_addr_check(void) {
+    ENABLE_RAM_MBC5;
+    SWITCH_RAM_MBC5(0);
+    *(volatile uint8_t *)ADDR_CHECK_ADDR = ADDR_CHECK_DONE;
+    DISABLE_RAM_MBC5;
+}
+
 
 void show_progress_page() BANKED {
     uint16_t last = 0;
@@ -142,8 +166,9 @@ void show_progress_page() BANKED {
     read_trailer(&last, 0, 0);
     banks = (unsigned long)last + 1UL;
     work_total = ADDRESS_WORK_UL + banks * (unsigned long)WEIGHT_CRC_BANK;
-    if (current_state == STATE_TESTING) {
-        work_total += banks * (unsigned long)WEIGHT_SUM_BANK;
+    if (addr_check_byte() != ADDR_CHECK_DONE) {
+        /* Known wallet, then the user's. */
+        work_total += ADDRESS_WORK_UL;
     }
     progress_on = 1;
     bar_draw_y = BAR_Y;
@@ -161,10 +186,8 @@ void show_progress_page() BANKED {
         VBK_REG = 0;
     }
 
-    if (current_state != STATE_TESTING) {
-        gotoxy(1, 1);
-        printf("   Address Gen.");
-    }
+    gotoxy(1, 1);
+    printf("   Address Gen.");
 
     unsigned char top_empty[BAR_TOTAL_TILES];
     unsigned char bot_empty[BAR_TOTAL_TILES];
@@ -183,8 +206,46 @@ void show_progress_page() BANKED {
     set_bkg_tiles(BAR_X, BAR_Y,     BAR_TOTAL_TILES, 1, top_empty);
     set_bkg_tiles(BAR_X, BAR_Y + 1, BAR_TOTAL_TILES, 1, bot_empty);
 
-    progress_ride_begin(current_state != STATE_TESTING);
+    progress_ride_begin();
     progress_ride_tick(0UL, work_total);
+}
+
+/* Known abandon wallet. The phrase and the three addresses live in
+   this bank. The caller's buffers are the ones address generation
+   already has. A match is recorded before the caller derives the
+   user's mnemonic. A mismatch leaves the byte alone. */
+uint8_t run_known_addr_check(uint8_t *seed, uint8_t *priv, uint8_t *pub,
+                             char *doge, char *pepe, char *bells) BANKED {
+    char phrase[109];
+
+    if (addr_check_byte() == ADDR_CHECK_DONE) return 1;
+
+    strcpy(phrase, "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about");
+    mnemonic_to_seed(phrase, seed);
+
+#ifndef TEST_MODE
+    __asm__("di");
+#endif
+
+    seed_to_addresses(seed, doge, pepe, bells, priv, pub);
+
+    if (strcmp(doge, "DBus3bamQjgJULBJtYXpEzDWQRwF5iwxgC") != 0
+        || strcmp(pepe, "PehYeRLFsRj5jboZXTC6rFHxmYdmV9RdfR") != 0
+        || strcmp(bells, "BBDr846KrqMvPAUsmSsDpMraFueXWBWgih") != 0
+        || !validate_checksum(doge)
+        || !validate_checksum(pepe)
+        || !validate_checksum(bells)) {
+#ifndef TEST_MODE
+        __asm__("ei");
+#endif
+        return 0;
+    }
+
+#ifndef TEST_MODE
+    __asm__("ei");
+#endif
+    mark_addr_check();
+    return 1;
 }
 
 /* Boot word-sum screen. Same bar as address gen, drawn in the middle,
@@ -200,23 +261,6 @@ void prepare_rom_check_bar(void) BANKED {
         VBK_REG = 0;
     }
     update_progress(0);
-}
-
-/* Word sum of banks 0..last_used. Two half-bank slices are one bank.
-   Each bank moves the bar by the measured checksum time. */
-bool quick_rom_verify_integrity(void) BANKED {
-    uint16_t last = 0;
-    uint16_t stored = 0;
-    uint16_t b;
-
-    read_trailer(&last, &stored, 0);
-    boot_sum = 0;
-    for (b = 0; b <= last; b++) {
-        rom_sum_slice(b, 1);
-        rom_sum_slice(b, 0);
-        add_progress(WEIGHT_SUM_BANK);
-    }
-    return boot_sum == stored;
 }
 
 /* CRC32 of the same banks. The complement matches patch_bitrot.py. */

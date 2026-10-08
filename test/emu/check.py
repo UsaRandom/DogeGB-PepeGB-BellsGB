@@ -32,7 +32,7 @@ MNEMONIC = (
     "abandon abandon abandon abandon about"
 )
 
-# Vectors already pinned in src/states_testing.c.
+# Vectors already pinned in src/progress.c.
 KNOWN_ADDRESSES = {
     "doge": "DBus3bamQjgJULBJtYXpEzDWQRwF5iwxgC",
     "pepe": "PehYeRLFsRj5jboZXTC6rFHxmYdmV9RdfR",

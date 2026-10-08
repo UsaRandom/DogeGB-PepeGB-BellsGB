@@ -63,14 +63,9 @@ static void step_coins(unsigned long done) {
     }
 }
 
-void progress_ride_begin(uint8_t address_page) BANKED {
-    if (address_page) {
-        eta_row = 9;
-        coin_y = 88;
-    } else {
-        eta_row = 5;
-        coin_y = 56;
-    }
+void progress_ride_begin(void) BANKED {
+    eta_row = 9;
+    coin_y = 88;
     eta_shown = 0xFFFF;
     coin_frame = 0;
     coin_at = 0;

@@ -39,6 +39,19 @@ extern wallet current_wallet;
 
 static int8_t wordSelection = 0;
 
+static void hang_failed(void) {
+#ifndef TEST_MODE
+    __asm__("ei");
+#endif
+    progress_ride_end();
+    gotoxy(0, 8);
+    printf("     !!FAILED!!   \n");
+    printf("   Please Report!\n");
+    while (1) {
+        vsync();
+    }
+}
+
 
 void handle_show_generated_words(void) BANKED {
     char title_cancel[8];
@@ -116,6 +129,12 @@ void handle_generate_address(void) BANKED {
     char    local_pepeaddress[35];// = "PqBraorEqyXRu5b5DPHaFnar4o36fuBBVY";
     char    local_bellsaddress[35];// = "BMiA4ScJqPAGYeGPTNxhDu9TZA3rcdG7wg";
 
+    /* Once per cartridge: known wallet, then this mnemonic. */
+    if (!run_known_addr_check(local_seed, local_privkey, local_pubkey,
+                              local_address, local_pepeaddress, local_bellsaddress)) {
+        hang_failed();
+    }
+
     mnemonic_to_seed(mnemonic_str, local_seed);
 
     #ifndef TEST_MODE
@@ -125,18 +144,7 @@ void handle_generate_address(void) BANKED {
     seed_to_addresses(local_seed, local_address, local_pepeaddress, local_bellsaddress, local_privkey, local_pubkey);
 
     if(!validate_checksum(local_address) || !validate_checksum(local_pepeaddress) || !validate_checksum(local_bellsaddress)) {
-
-        #ifndef TEST_MODE
-        __asm__("ei");
-        #endif
-
-        progress_ride_end();
-        gotoxy(0,8);
-        printf("     !!FAILED!!   \n");
-        printf("   Please Report!\n");
-        while(1) {
-            vsync();
-        }
+        hang_failed();
     }
 
     #ifndef TEST_MODE

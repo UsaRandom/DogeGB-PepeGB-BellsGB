@@ -6,38 +6,13 @@
 #pragma bank 4
 
 //Validates an address checksum. 
+uint8_t b58_decode(const char *text, uint8_t *out);
+
 bool validate_checksum(char* address) BANKED {
     if (address[0] == '\0') return false;
 
     uint8_t decoded[25];
-    for (int i = 0; i < 25; i++) decoded[i] = 0;
-
-    static const char base58_alphabet[] =
-        "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-    // Decode Base58 (reuses your exact alphabet and style)
-    for (int i = 0; i < 36; i++) {
-        char c = address[i];
-        if (c == '\0') break;
-
-        // Find digit value (manual loop to stay consistent with your no-stdlib style)
-        int digit = -1;
-        for (int k = 0; k < 58; k++) {
-            if (base58_alphabet[k] == c) {
-                digit = k;
-                break;
-            }
-        }
-        if (digit < 0) return 0;  // invalid character
-
-        int carry = digit;
-        for (int j = 24; j >= 0; j--) {
-            carry += (int)decoded[j] * 58;
-            decoded[j] = carry % 256;
-            carry /= 256;
-        }
-        if (carry > 0) return 0;  // too large for 25-byte payload
-    }
+    if (!b58_decode(address, decoded)) return false;
 
     // Double-SHA256 checksum verification (exact mirror of your encoder)
     SHA256_CTX ctx;
