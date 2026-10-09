@@ -38,6 +38,7 @@ const state = {
 
 let scanGen = 0;
 let stream = null;
+let cameraStarting = false;
 
 function h(tag, props, children) {
   const node = document.createElement(tag);
@@ -636,54 +637,89 @@ async function copyAll(event) {
   }
 }
 
-function renderScan() {
-  const video = h("video", { id: "cam", autoplay: true, muted: true, playsinline: true });
-  const photo = h("input", { id: "photo", type: "file", accept: "image/*", capture: "environment" });
-  photo.hidden = true;
-  photo.addEventListener("change", () => readPhoto(photo.files && photo.files[0]));
-  const title = state.scanFor === "wallet" ? "Scan your Game Boy" : "Scan their code";
-  screen.append(
-    h("h1", {}, [title]),
-    h("p", { class: "lead" }, ["Fill the box with the square code. Hold steady."]),
-    h("div", { class: "finder" }, [video, h("div", { class: "frame" })]),
-    h("p", { class: "bad" }, [state.scanError]),
-    secondary("Take a photo instead", () => photo.click()),
-    textButton("Type it instead", () => go(state.scanFor === "wallet" ? "typeWallet" : "pay")),
-    photo
-  );
-  openCamera();
+function cameraAvailable() {
+  return !!(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
 }
 
-async function openCamera() {
-  const gen = ++scanGen;
+function stopTracks(media) {
+  if (!media) return;
+  for (const track of media.getTracks()) track.stop();
+}
+
+function renderScan() {
+  const live = cameraAvailable();
+  const video = h("video", { id: "cam", autoplay: true, muted: true, playsinline: true });
+  video.muted = true;
+  video.playsInline = true;
+  video.setAttribute("webkit-playsinline", "");
+  const photo = h("input", { id: "photo", type: "file", accept: "image/*", capture: "environment" });
+  photo.addEventListener("change", () => readPhoto(photo.files && photo.files[0]));
+  const title = state.scanFor === "wallet" ? "Scan your Game Boy" : "Scan their code";
+  const bits = [
+    h("h1", {}, [title]),
+    h("p", { class: "lead" }, [live
+      ? "Allow the camera, then fill the box with the code."
+      : "Take a photo of the code."]),
+  ];
+  if (live) bits.push(h("div", { class: "finder" }, [video, h("div", { class: "frame" })]));
+  bits.push(h("p", { class: "bad" }, [state.scanError]));
+  bits.push(h("label", {
+    id: "take-photo",
+    class: live ? "secondary pick" : "primary pick",
+  }, [live ? "Take a photo instead" : "Take a photo", photo]));
+  bits.push(textButton("Type it instead", () => go(state.scanFor === "wallet" ? "typeWallet" : "pay")));
+  screen.append(...bits);
+  if (live && !cameraStarting) openCamera();
+}
+
+function openCamera() {
+  const gen = scanGen;
+  navigator.mediaDevices.getUserMedia({ audio: false, video: true })
+    .then((got) => gotCamera(gen, got))
+    .catch((err) => failCamera(gen, err));
+}
+
+function failCamera(gen, problem) {
+  if (gen !== scanGen || state.step !== "scan") return;
+  const name = problem && problem.name;
+  state.scanError = name === "NotAllowedError"
+    ? "Allow the camera for this site, then tap Scan again."
+    : "Take a photo of the code instead.";
+  const bad = screen.querySelector(".bad");
+  if (bad) bad.textContent = state.scanError;
+  const photoBtn = document.getElementById("take-photo");
+  if (photoBtn) photoBtn.className = "primary pick";
+}
+
+async function gotCamera(gen, got) {
+  if (gen !== scanGen) { stopTracks(got); return; }
+  stream = got;
   const video = document.getElementById("cam");
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    state.scanError = "There is no camera here. Type the address instead.";
-    const bad = screen.querySelector(".bad");
-    if (bad) bad.textContent = state.scanError;
-    return;
-  }
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-    });
-  } catch (problem) {
-    if (gen !== scanGen) return;
-    const name = problem && problem.name;
-    state.scanError = name === "NotAllowedError"
-      ? "The camera is blocked. Allow it for this site, or type the address."
-      : "The camera did not start. Type the address instead.";
-    const bad = screen.querySelector(".bad");
-    if (bad) bad.textContent = state.scanError;
-    return;
-  }
-  if (gen !== scanGen) {
-    stopCamera();
-    return;
-  }
+  if (!video) { stopTracks(got); stream = null; return; }
+  video.muted = true;
+  video.playsInline = true;
   video.srcObject = stream;
-  await video.play();
+  try { await video.play(); } catch { /* show the frames anyway */ }
+  listenForCodes(gen, video);
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const back = devices.find((d) => d.kind === "videoinput" && /back|rear|environment/i.test(d.label || ""));
+    const track = stream.getVideoTracks()[0];
+    const currentId = track && track.getSettings().deviceId;
+    if (!back || !back.deviceId || back.deviceId === currentId || gen !== scanGen) return;
+    const better = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { deviceId: { exact: back.deviceId } },
+    });
+    if (gen !== scanGen) { stopTracks(better); return; }
+    stopTracks(stream);
+    stream = better;
+    video.srcObject = stream;
+    try { await video.play(); } catch { /* keep the new track */ }
+  } catch { /* the first camera stays */ }
+}
+
+function listenForCodes(gen, video) {
   let detector = null;
   if ("BarcodeDetector" in window) {
     try { detector = new BarcodeDetector({ formats: ["qr_code"] }); }
@@ -758,7 +794,15 @@ function startScan(which) {
   state.scanFor = which;
   state.scanError = "";
   state.step = "scan";
+  const request = cameraAvailable()
+    ? navigator.mediaDevices.getUserMedia({ audio: false, video: true })
+    : null;
+  cameraStarting = !!request;
   render();
+  cameraStarting = false;
+  if (!request) return;
+  const gen = scanGen;
+  request.then((got) => gotCamera(gen, got)).catch((err) => failCamera(gen, err));
 }
 
 function render() {

@@ -85,13 +85,14 @@ h1 {
   padding-top: 1.25rem;
 }
 
-button.primary, button.secondary, button.text {
+button.primary, button.secondary, button.text,
+label.pick {
   min-height: 3.25rem;
   border-radius: 12px;
   width: 100%;
 }
 
-button.primary {
+button.primary, label.primary {
   border: 0;
   background: var(--gold);
   color: #1a140c;
@@ -99,10 +100,27 @@ button.primary {
   font-size: 1.15rem;
 }
 
-button.secondary {
+button.secondary, label.secondary {
   border: 1px solid var(--gold);
   background: transparent;
   color: var(--gold);
+}
+
+label.pick {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+label.pick input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 button.text {
