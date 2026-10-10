@@ -93,6 +93,8 @@ function stopCamera() {
     for (const track of stream.getTracks()) track.stop();
     stream = null;
   }
+  const cam = document.getElementById("cam");
+  if (cam) cam.srcObject = null;
 }
 
 function go(step) {
@@ -651,16 +653,58 @@ function stopTracks(media) {
   for (const track of media.getTracks()) track.stop();
 }
 
-function renderScan() {
-  const live = cameraAvailable();
-  const video = h("video", { id: "cam", autoplay: true, muted: true, playsinline: true });
+function prepareCamera(video) {
   video.muted = true;
   video.defaultMuted = true;
+  video.autoplay = true;
   video.playsInline = true;
-  video.setAttribute("autoplay", "");
   video.setAttribute("muted", "");
-  video.setAttribute("playsinline", "");
-  video.setAttribute("webkit-playsinline", "");
+  video.setAttribute("autoplay", "");
+  video.setAttribute("playsinline", "true");
+  video.setAttribute("webkit-playsinline", "true");
+}
+
+function placeCamera() {
+  const video = document.getElementById("cam");
+  const slot = document.querySelector(".finder");
+  if (!video || !slot || state.step !== "scan") return;
+  const box = slot.getBoundingClientRect();
+  const vv = window.visualViewport;
+  const offsetLeft = vv ? vv.offsetLeft : 0;
+  const offsetTop = vv ? vv.offsetTop : 0;
+  const edge = 3;
+  video.style.left = (box.left + offsetLeft + edge) + "px";
+  video.style.top = (box.top + offsetTop + edge) + "px";
+  video.style.width = Math.max(1, box.width - edge * 2) + "px";
+  video.style.height = Math.max(1, box.height - edge * 2) + "px";
+  video.style.transform = "translateZ(0)";
+  video.style.webkitTransform = "translateZ(0)";
+  const frame = slot.querySelector(".frame");
+  if (!frame) return;
+  frame.style.position = "fixed";
+  frame.style.zIndex = "3";
+  frame.style.inset = "auto";
+  frame.style.left = (box.left + offsetLeft + box.width * 0.12) + "px";
+  frame.style.top = (box.top + offsetTop + box.height * 0.14) + "px";
+  frame.style.width = (box.width * 0.76) + "px";
+  frame.style.height = (box.height * 0.72) + "px";
+}
+
+function parkCamera() {
+  const video = document.getElementById("cam");
+  if (!video) return;
+  video.style.left = "";
+  video.style.top = "";
+  video.style.width = "";
+  video.style.height = "";
+  video.style.transform = "";
+  video.style.webkitTransform = "";
+}
+
+function renderScan() {
+  const live = cameraAvailable();
+  const video = document.getElementById("cam");
+  if (video) prepareCamera(video);
   const photo = h("input", { id: "photo", type: "file", accept: "image/*", capture: "environment" });
   photo.addEventListener("change", () => readPhoto(photo.files && photo.files[0]));
   const title = state.scanFor === "wallet" ? "Scan your Game Boy" : "Scan their code";
@@ -670,17 +714,11 @@ function renderScan() {
       ? "Tap Allow the camera. Safari will ask before the picture starts."
       : "Take a photo of the code."]),
   ];
-  if (live) bits.push(h("div", { class: "finder" }, [video, h("div", { class: "frame" })]));
+  if (live) bits.push(h("div", { class: "finder" }, [h("div", { class: "frame" })]));
   bits.push(h("p", { class: "bad" }, [state.scanError]));
   if (live) {
     const allow = primary("Allow the camera", askCamera);
     allow.id = "allow-cam";
-    if (iphone()) {
-      allow.addEventListener("touchend", (event) => {
-        event.preventDefault();
-        askCamera();
-      }, { passive: false });
-    }
     bits.push(allow);
   }
   bits.push(h("label", {
@@ -689,6 +727,7 @@ function renderScan() {
   }, [live ? "Take a photo instead" : "Take a photo", photo]));
   bits.push(textButton("Type it instead", () => go(state.scanFor === "wallet" ? "typeWallet" : "pay")));
   screen.append(...bits);
+  if (live) placeCamera();
 }
 
 function askCamera() {
@@ -702,6 +741,13 @@ function askCamera() {
   }
   cameraAsked = true;
   if (button) button.disabled = true;
+  prepareCamera(video);
+  placeCamera();
+  const prime = video.play();
+  if (prime && prime.catch) prime.catch(() => {});
+  const bad = screen.querySelector(".bad");
+  if (bad) bad.textContent = "Asking for the camera…";
+  requestAnimationFrame(placeCamera);
   let request;
   try {
     request = navigator.mediaDevices.getUserMedia({
@@ -715,7 +761,6 @@ function askCamera() {
     return;
   }
   request.then((got) => {
-    if (button) button.hidden = true;
     gotCamera(gen, got);
   }).catch((err) => {
     cameraAsked = false;
@@ -726,6 +771,14 @@ function askCamera() {
 
 function failCamera(gen, problem) {
   if (gen !== scanGen || state.step !== "scan") return;
+  cameraAsked = false;
+  if (stream) {
+    stopTracks(stream);
+    stream = null;
+  }
+  const video = document.getElementById("cam");
+  if (video) video.srcObject = null;
+  scanGen += 1;
   const name = (problem && problem.name) || "Error";
   if (name === "NotAllowedError") {
     state.scanError = iphone()
@@ -736,8 +789,14 @@ function failCamera(gen, problem) {
   }
   const bad = screen.querySelector(".bad");
   if (bad) bad.textContent = state.scanError;
+  const button = document.getElementById("allow-cam");
+  if (button) {
+    button.hidden = false;
+    button.disabled = false;
+  }
   const photoBtn = document.getElementById("take-photo");
   if (photoBtn) photoBtn.className = "primary pick";
+  requestAnimationFrame(placeCamera);
 }
 
 function gotCamera(gen, got) {
@@ -745,13 +804,42 @@ function gotCamera(gen, got) {
   stream = got;
   const video = document.getElementById("cam");
   if (!video) { stopTracks(got); stream = null; return; }
-  video.muted = true;
-  video.playsInline = true;
+  prepareCamera(video);
   video.srcObject = stream;
-  const started = video.play();
-  if (started && started.catch) started.catch(() => {});
-  const lead = screen.querySelector(".lead");
-  if (lead) lead.textContent = "Fill the box with the code. Hold steady.";
+  let shown = false;
+  const reveal = () => {
+    if (gen !== scanGen || shown) return;
+    shown = true;
+    const lead = screen.querySelector(".lead");
+    if (lead) lead.textContent = "Fill the box with the code. Hold steady.";
+    const button = document.getElementById("allow-cam");
+    if (button) button.hidden = true;
+    const bad = screen.querySelector(".bad");
+    if (bad && state.scanError === "") bad.textContent = "";
+    placeCamera();
+    requestAnimationFrame(placeCamera);
+  };
+  const show = () => {
+    if (gen !== scanGen || shown) return;
+    let started;
+    try { started = video.play(); }
+    catch (err) { failCamera(gen, err); return; }
+    const done = started && started.then ? started : Promise.resolve();
+    done.then(() => {
+      if (gen !== scanGen) return;
+      reveal();
+    }).catch((err) => {
+      if (gen !== scanGen || shown || video.readyState < 1) return;
+      failCamera(gen, err);
+    });
+  };
+  show();
+  video.onloadedmetadata = show;
+  setTimeout(() => {
+    if (gen !== scanGen || shown) return;
+    if (video.readyState >= 2) show();
+    else failCamera(gen, { name: "TimeoutError" });
+  }, 2000);
   listenForCodes(gen, video);
 }
 
@@ -839,6 +927,7 @@ function startScan(which) {
 
 function render() {
   stopCamera();
+  parkCamera();
   document.body.classList.toggle("scanning", state.step === "scan");
   const step = stepIndex();
   dotsEl.replaceChildren();
@@ -872,10 +961,20 @@ backBtn.addEventListener("click", () => {});
 let wideNow = wide();
 window.addEventListener("resize", () => {
   const next = wide();
-  if (next === wideNow) return;
-  wideNow = next;
-  if (state.step === "home") render();
+  if (next !== wideNow) {
+    wideNow = next;
+    if (state.step === "home") render();
+  }
+  if (state.step === "scan") placeCamera();
 });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", () => {
+    if (state.step === "scan") placeCamera();
+  });
+  window.visualViewport.addEventListener("scroll", () => {
+    if (state.step === "scan") placeCamera();
+  });
+}
 try {
   render();
 } catch (problem) {

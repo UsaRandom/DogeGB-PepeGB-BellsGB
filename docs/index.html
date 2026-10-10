@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#16120c">
   <title>DogeGB</title>
-  <link rel="stylesheet" href="app.css?v=3">
+  <link rel="stylesheet" href="app.css?v=4">
 </head>
 <body>
+  <video id="cam" autoplay muted playsinline webkit-playsinline></video>
   <div id="app">
     <header class="top">
       <button id="back" type="button" hidden>Back</button>
@@ -22,8 +23,8 @@
       boot.textContent = (ev && ev.message) || "This page did not start.";
     });
   </script>
-  <script src="jsQR.js?v=3"></script>
-  <script src="codec.js?v=3"></script>
-  <script src="app.js?v=3"></script>
+  <script src="jsQR.js?v=4"></script>
+  <script src="codec.js?v=4"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
